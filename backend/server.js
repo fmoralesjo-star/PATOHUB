@@ -8,6 +8,8 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { Pool } = require('pg');
+const cloudinary = require('cloudinary').v2;
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -190,35 +192,80 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Crear carpeta para imágenes si no existe
-const uploadsDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
+// Configurar Cloudinary
+const useCloudinary = process.env.CLOUDINARY_CLOUD_NAME && 
+                      process.env.CLOUDINARY_API_KEY && 
+                      process.env.CLOUDINARY_API_SECRET;
+
+if (useCloudinary) {
+  cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET
+  });
+  console.log('✅ Cloudinary configurado correctamente');
+} else {
+  console.log('⚠️  Cloudinary no configurado, usando almacenamiento local');
 }
 
-// Configurar multer para subida de imágenes
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadsDir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
-  }
-});
-
-const upload = multer({ 
-  storage: storage,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
-  fileFilter: (req, file, cb) => {
-    const allowedTypes = /jpeg|jpg|png|gif|webp/;
-    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-    const mimetype = allowedTypes.test(file.mimetype);
-    if (mimetype && extname) {
-      return cb(null, true);
+// Configurar almacenamiento: Cloudinary si está configurado, sino local
+let upload;
+if (useCloudinary) {
+  // Usar Cloudinary Storage
+  const cloudinaryStorage = new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: {
+      folder: 'patoshub',
+      allowed_formats: ['jpg', 'jpeg', 'png', 'gif', 'webp'],
+      transformation: [{ width: 1920, height: 1080, crop: 'limit' }], // Limitar tamaño máximo
+      resource_type: 'auto'
     }
-    cb(new Error('Solo se permiten imágenes (jpeg, jpg, png, gif, webp)'));
+  });
+  
+  upload = multer({ 
+    storage: cloudinaryStorage,
+    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+    fileFilter: (req, file, cb) => {
+      const allowedTypes = /jpeg|jpg|png|gif|webp/;
+      const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+      const mimetype = allowedTypes.test(file.mimetype);
+      if (mimetype && extname) {
+        return cb(null, true);
+      }
+      cb(new Error('Solo se permiten imágenes (jpeg, jpg, png, gif, webp)'));
+    }
+  });
+} else {
+  // Usar almacenamiento local (fallback)
+  const uploadsDir = path.join(__dirname, 'uploads');
+  if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
   }
-});
+  
+  const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+      cb(null, uploadsDir);
+    },
+    filename: (req, file, cb) => {
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+      cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+    }
+  });
+  
+  upload = multer({ 
+    storage: storage,
+    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+    fileFilter: (req, file, cb) => {
+      const allowedTypes = /jpeg|jpg|png|gif|webp/;
+      const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+      const mimetype = allowedTypes.test(file.mimetype);
+      if (mimetype && extname) {
+        return cb(null, true);
+      }
+      cb(new Error('Solo se permiten imágenes (jpeg, jpg, png, gif, webp)'));
+    }
+  });
+}
 
 // Función helper para convertir snake_case a camelCase
 function toCamelCase(obj) {
@@ -1190,49 +1237,88 @@ app.delete('/api/disponibilidades/:id', authenticateToken, async (req, res) => {
 });
 
 // ========== SUBIDA DE IMÁGENES ==========
-app.post('/api/upload/image', authenticateToken, upload.single('image'), (req, res) => {
+app.post('/api/upload/image', authenticateToken, upload.single('image'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No se proporcionó ninguna imagen' });
     }
 
     const { type, entityId } = req.body;
-    const imageUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+    
+    // Si se usa Cloudinary, req.file.path contiene la URL de Cloudinary
+    // Si se usa almacenamiento local, construimos la URL local
+    let imageUrl;
+    if (useCloudinary && req.file.path) {
+      imageUrl = req.file.path; // URL completa de Cloudinary
+    } else {
+      imageUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+    }
 
     res.json({
       url: imageUrl,
       message: 'Imagen subida exitosamente',
       type: type,
-      entityId: entityId
+      entityId: entityId,
+      storage: useCloudinary ? 'cloudinary' : 'local'
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-app.delete('/api/upload/image', authenticateToken, (req, res) => {
+app.delete('/api/upload/image', authenticateToken, async (req, res) => {
   try {
     const { url } = req.query;
     if (!url) {
       return res.status(400).json({ error: 'URL de imagen requerida' });
     }
 
-    const filename = url.split('/').pop();
-    const filePath = path.join(uploadsDir, filename);
-
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-      res.json({ message: 'Imagen eliminada exitosamente' });
+    if (useCloudinary && url.includes('cloudinary.com')) {
+      // Eliminar de Cloudinary
+      try {
+        // Extraer el public_id de la URL de Cloudinary
+        // Formato: https://res.cloudinary.com/cloud_name/image/upload/v1234567890/patoshub/filename.jpg
+        const urlParts = url.split('/');
+        const uploadIndex = urlParts.findIndex(part => part === 'upload');
+        if (uploadIndex !== -1 && urlParts[uploadIndex + 1]) {
+          // Obtener la parte después de 'upload'
+          const afterUpload = urlParts.slice(uploadIndex + 2).join('/');
+          const publicId = afterUpload.replace(/\.[^/.]+$/, ''); // Remover extensión
+          
+          const result = await cloudinary.uploader.destroy(publicId);
+          if (result.result === 'ok') {
+            return res.json({ message: 'Imagen eliminada exitosamente de Cloudinary' });
+          } else {
+            return res.status(404).json({ error: 'Imagen no encontrada en Cloudinary' });
+          }
+        }
+      } catch (cloudinaryError) {
+        console.error('Error al eliminar de Cloudinary:', cloudinaryError);
+        return res.status(500).json({ error: 'Error al eliminar imagen de Cloudinary' });
+      }
     } else {
-      res.status(404).json({ error: 'Imagen no encontrada' });
+      // Eliminar de almacenamiento local
+      const uploadsDir = path.join(__dirname, 'uploads');
+      const filename = url.split('/').pop();
+      const filePath = path.join(uploadsDir, filename);
+
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+        res.json({ message: 'Imagen eliminada exitosamente' });
+      } else {
+        res.status(404).json({ error: 'Imagen no encontrada' });
+      }
     }
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// Servir archivos estáticos de uploads
-app.use('/uploads', express.static(uploadsDir));
+// Servir archivos estáticos de uploads (solo si no se usa Cloudinary)
+if (!useCloudinary) {
+  const uploadsDir = path.join(__dirname, 'uploads');
+  app.use('/uploads', express.static(uploadsDir));
+}
 
 // Manejo de errores
 app.use((err, req, res, next) => {
