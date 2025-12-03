@@ -14,46 +14,35 @@ const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'tu_secreto_super_seguro_cambiar_en_produccion';
 
 // Configurar conexión a PostgreSQL
-let pool;
-try {
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    console.error('❌ DATABASE_URL no está configurada');
-  } else {
-    console.log('🔗 Conectando a PostgreSQL...');
-    // Si la URL no tiene el dominio completo, intentar agregarlo
-    let connectionString = databaseUrl;
-    if (connectionString.includes('@dpg-') && !connectionString.includes('.render.com')) {
-      // Extraer el hostname y agregar el dominio
-      const match = connectionString.match(/@([^/]+)/);
-      if (match) {
-        const hostname = match[1];
-        // Determinar la región basándose en el hostname o usar oregon por defecto
-        const region = 'oregon-postgres'; // Puede ser oregon-postgres, frankfurt-postgres, etc.
-        connectionString = connectionString.replace(`@${hostname}`, `@${hostname}.${region}.render.com:5432`);
-        console.log('🔧 URL de base de datos ajustada para Render');
-      }
-    }
-    
-    pool = new Pool({
-      connectionString: connectionString,
-      ssl: {
-        rejectUnauthorized: false
-      }
-    });
-    
-    // Probar la conexión
-    pool.query('SELECT NOW()', (err, res) => {
-      if (err) {
-        console.error('❌ Error al conectar a PostgreSQL:', err.message);
-      } else {
-        console.log('✅ Conexión a PostgreSQL exitosa');
-      }
-    });
-  }
-} catch (error) {
-  console.error('❌ Error al configurar PostgreSQL:', error);
+const databaseUrl = process.env.DATABASE_URL;
+if (!databaseUrl) {
+  console.error('❌ DATABASE_URL no está configurada');
+  process.exit(1);
 }
+
+console.log('🔗 Configurando conexión a PostgreSQL...');
+// Si la URL no tiene el dominio completo, intentar agregarlo
+let connectionString = databaseUrl;
+if (connectionString.includes('@dpg-') && !connectionString.includes('.render.com')) {
+  // Extraer el hostname y agregar el dominio
+  const match = connectionString.match(/@([^/]+)/);
+  if (match) {
+    const hostname = match[1];
+    // Determinar la región basándose en el hostname o usar oregon por defecto
+    const region = 'oregon-postgres'; // Puede ser oregon-postgres, frankfurt-postgres, etc.
+    connectionString = connectionString.replace(`@${hostname}`, `@${hostname}.${region}.render.com:5432`);
+    console.log('🔧 URL de base de datos ajustada para Render');
+  }
+}
+
+const pool = new Pool({
+  connectionString: connectionString,
+  ssl: {
+    rejectUnauthorized: false
+  },
+  connectionTimeoutMillis: 10000,
+  idleTimeoutMillis: 30000
+});
 
 // Inicializar tablas de la base de datos
 async function initializeDatabase() {
