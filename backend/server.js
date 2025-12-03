@@ -23,33 +23,35 @@ if (!databaseUrl) {
 console.log('🔗 Configurando conexión a PostgreSQL...');
 console.log('📋 DATABASE_URL recibida:', databaseUrl.replace(/:[^:@]+@/, ':****@')); // Ocultar contraseña en logs
 
-// Si la URL no tiene el dominio completo, intentar agregarlo
+// Limpiar y preparar la URL de conexión
 let connectionString = databaseUrl.trim();
+
+// Si la URL no tiene el dominio completo (solo tiene @dpg-xxx-a/), intentar agregarlo
 if (connectionString.includes('@dpg-') && !connectionString.includes('.render.com')) {
+  console.log('⚠️ URL parece estar incompleta, intentando completar...');
   // Extraer el hostname y agregar el dominio
   const match = connectionString.match(/@([^/:]+)/);
   if (match) {
     const hostname = match[1];
-    // Determinar la región - intentar detectar desde la URL o usar oregon por defecto
-    // Las URLs de Render suelen tener formato: dpg-xxxxx-a.region-postgres.render.com
-    let region = 'oregon-postgres'; // Por defecto
-    
-    // Si el servicio está en Oregon (como vimos antes), usar oregon-postgres
-    // Si está en otra región, cambiar esto
+    // Usar oregon-postgres por defecto (ajustar si la región es diferente)
+    const region = 'oregon-postgres';
     connectionString = connectionString.replace(
       `@${hostname}/`,
       `@${hostname}.${region}.render.com:5432/`
     );
     console.log('🔧 URL de base de datos ajustada para Render');
-    console.log('📋 URL ajustada:', connectionString.replace(/:[^:@]+@/, ':****@'));
   }
+} else if (connectionString.includes('.render.com')) {
+  console.log('✅ URL de base de datos parece estar completa');
 }
 
-// Validar que la URL tenga el formato correcto
-if (!connectionString.includes('.render.com') && !connectionString.includes('localhost')) {
-  console.error('❌ URL de base de datos parece estar incompleta');
-  console.error('📋 URL actual:', connectionString.replace(/:[^:@]+@/, ':****@'));
+// Validar formato básico
+if (!connectionString.startsWith('postgresql://') && !connectionString.startsWith('postgres://')) {
+  console.error('❌ URL de base de datos no tiene el formato correcto');
+  console.error('📋 Debe comenzar con postgresql:// o postgres://');
 }
+
+console.log('📋 URL final (sin contraseña):', connectionString.replace(/:[^:@]+@/, ':****@'));
 
 const pool = new Pool({
   connectionString: connectionString,
