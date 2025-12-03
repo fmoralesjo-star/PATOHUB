@@ -10,6 +10,7 @@ const fs = require('fs');
 const { Pool } = require('pg');
 const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
+const ImageKit = require('imagekit');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -191,13 +192,24 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Crear carpeta para imágenes si no existe
-// Configurar Cloudinary
+// Configurar servicios de almacenamiento en la nube
 const useCloudinary = process.env.CLOUDINARY_CLOUD_NAME && 
                       process.env.CLOUDINARY_API_KEY && 
                       process.env.CLOUDINARY_API_SECRET;
 
-if (useCloudinary) {
+const useImageKit = process.env.IMAGEKIT_PUBLIC_KEY && 
+                    process.env.IMAGEKIT_PRIVATE_KEY && 
+                    process.env.IMAGEKIT_URL_ENDPOINT;
+
+let imagekit;
+if (useImageKit) {
+  imagekit = new ImageKit({
+    publicKey: process.env.IMAGEKIT_PUBLIC_KEY,
+    privateKey: process.env.IMAGEKIT_PRIVATE_KEY,
+    urlEndpoint: process.env.IMAGEKIT_URL_ENDPOINT
+  });
+  console.log('✅ ImageKit configurado correctamente');
+} else if (useCloudinary) {
   cloudinary.config({
     cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
     api_key: process.env.CLOUDINARY_API_KEY,
@@ -205,12 +217,28 @@ if (useCloudinary) {
   });
   console.log('✅ Cloudinary configurado correctamente');
 } else {
-  console.log('⚠️  Cloudinary no configurado, usando almacenamiento local');
+  console.log('⚠️  Ningún servicio de nube configurado, usando almacenamiento local');
 }
 
-// Configurar almacenamiento: Cloudinary si está configurado, sino local
+// Configurar almacenamiento: ImageKit > Cloudinary > Local
 let upload;
-if (useCloudinary) {
+if (useImageKit) {
+  // ImageKit usa multer con almacenamiento en memoria (luego se sube a ImageKit)
+  const storage = multer.memoryStorage();
+  upload = multer({ 
+    storage: storage,
+    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+    fileFilter: (req, file, cb) => {
+      const allowedTypes = /jpeg|jpg|png|gif|webp/;
+      const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+      const mimetype = allowedTypes.test(file.mimetype);
+      if (mimetype && extname) {
+        return cb(null, true);
+      }
+      cb(new Error('Solo se permiten imágenes (jpeg, jpg, png, gif, webp)'));
+    }
+  });
+} else if (useCloudinary) {
   // Usar Cloudinary Storage
   const cloudinaryStorage = new CloudinaryStorage({
     cloudinary: cloudinary,
@@ -1273,7 +1301,35 @@ app.delete('/api/upload/image', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'URL de imagen requerida' });
     }
 
-    if (useCloudinary && url.includes('cloudinary.com')) {
+    if (useImageKit && url.includes('imagekit.io')) {
+      // Eliminar de ImageKit
+      try {
+        // Extraer el fileId o filePath de la URL de ImageKit
+        // Formato: https://ik.imagekit.io/your_imagekit_id/patoshub/filename.jpg
+        const urlParts = url.split('/');
+        const imagekitIndex = urlParts.findIndex(part => part.includes('imagekit.io'));
+        if (imagekitIndex !== -1) {
+          // Obtener la ruta después del dominio
+          const filePath = '/' + urlParts.slice(imagekitIndex + 1).join('/');
+          
+          // Buscar el archivo por path
+          const files = await imagekit.listFiles({
+            path: filePath
+          });
+          
+          if (files && files.length > 0) {
+            const fileId = files[0].fileId;
+            await imagekit.deleteFile(fileId);
+            return res.json({ message: 'Imagen eliminada exitosamente de ImageKit' });
+          } else {
+            return res.status(404).json({ error: 'Imagen no encontrada en ImageKit' });
+          }
+        }
+      } catch (imagekitError) {
+        console.error('Error al eliminar de ImageKit:', imagekitError);
+        return res.status(500).json({ error: 'Error al eliminar imagen de ImageKit' });
+      }
+    } else if (useCloudinary && url.includes('cloudinary.com')) {
       // Eliminar de Cloudinary
       try {
         // Extraer el public_id de la URL de Cloudinary
@@ -1314,8 +1370,8 @@ app.delete('/api/upload/image', authenticateToken, async (req, res) => {
   }
 });
 
-// Servir archivos estáticos de uploads (solo si no se usa Cloudinary)
-if (!useCloudinary) {
+// Servir archivos estáticos de uploads (solo si no se usa ningún servicio en la nube)
+if (!useImageKit && !useCloudinary) {
   const uploadsDir = path.join(__dirname, 'uploads');
   app.use('/uploads', express.static(uploadsDir));
 }

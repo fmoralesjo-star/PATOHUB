@@ -25,7 +25,8 @@
     "pg": "^8.11.3",
     "pg-hstore": "^2.3.4",
     "cloudinary": "^1.41.0",
-    "multer-storage-cloudinary": "^4.0.0"
+    "multer-storage-cloudinary": "^4.0.0",
+    "imagekit": "^4.1.1"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
