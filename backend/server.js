@@ -21,18 +21,34 @@ if (!databaseUrl) {
 }
 
 console.log('🔗 Configurando conexión a PostgreSQL...');
+console.log('📋 DATABASE_URL recibida:', databaseUrl.replace(/:[^:@]+@/, ':****@')); // Ocultar contraseña en logs
+
 // Si la URL no tiene el dominio completo, intentar agregarlo
-let connectionString = databaseUrl;
+let connectionString = databaseUrl.trim();
 if (connectionString.includes('@dpg-') && !connectionString.includes('.render.com')) {
   // Extraer el hostname y agregar el dominio
-  const match = connectionString.match(/@([^/]+)/);
+  const match = connectionString.match(/@([^/:]+)/);
   if (match) {
     const hostname = match[1];
-    // Determinar la región basándose en el hostname o usar oregon por defecto
-    const region = 'oregon-postgres'; // Puede ser oregon-postgres, frankfurt-postgres, etc.
-    connectionString = connectionString.replace(`@${hostname}`, `@${hostname}.${region}.render.com:5432`);
+    // Determinar la región - intentar detectar desde la URL o usar oregon por defecto
+    // Las URLs de Render suelen tener formato: dpg-xxxxx-a.region-postgres.render.com
+    let region = 'oregon-postgres'; // Por defecto
+    
+    // Si el servicio está en Oregon (como vimos antes), usar oregon-postgres
+    // Si está en otra región, cambiar esto
+    connectionString = connectionString.replace(
+      `@${hostname}/`,
+      `@${hostname}.${region}.render.com:5432/`
+    );
     console.log('🔧 URL de base de datos ajustada para Render');
+    console.log('📋 URL ajustada:', connectionString.replace(/:[^:@]+@/, ':****@'));
   }
+}
+
+// Validar que la URL tenga el formato correcto
+if (!connectionString.includes('.render.com') && !connectionString.includes('localhost')) {
+  console.error('❌ URL de base de datos parece estar incompleta');
+  console.error('📋 URL actual:', connectionString.replace(/:[^:@]+@/, ':****@'));
 }
 
 const pool = new Pool({
